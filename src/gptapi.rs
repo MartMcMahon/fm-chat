@@ -20,16 +20,22 @@ impl GptBot {
         GptBot { key, client }
     }
 
-    pub async fn gpt_req(&self, body: String) -> Result<std::string::String, reqwest::Error> {
-        let req = ChatRequest {
-            // model: "gpt-4".to_owned(),
-            model: "gpt-3.5-turbo".to_owned(),
-            messages: vec![MessageObject {
-                role: "user".to_owned(),
-                content: body.to_owned(),
-            }],
-        };
+    // pub async fn chat_req_builder(&self, )
 
+    // let req = ChatRequest {
+    //     // model: "gpt-4".to_owned(),
+    //     model: "gpt-3.5-turbo".to_owned(),
+    //     messages: vec![MessageObject {
+    //         role: "user".to_owned(),
+    //         content: body.to_owned(),
+    //     }],
+    // };
+
+    pub async fn gpt_req(
+        &self,
+        messages: Vec<MessageObject>,
+    ) -> Result<std::string::String, reqwest::Error> {
+        let req = ChatRequest::new(messages);
         let gpt_res = self
             .client
             .post(CHAT_COMPLETION)
@@ -69,8 +75,17 @@ impl Default for ChatRequest {
         }
     }
 }
+impl ChatRequest {
+    fn new(messages: Vec<MessageObject>) -> Self {
+        ChatRequest {
+            // model: "gpt-4".to_owned(),
+            model: "gpt-3.5-turbo".to_owned(),
+            messages,
+        }
+    }
+}
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct MessageObject {
     pub role: String,
     pub content: String,

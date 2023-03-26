@@ -1,16 +1,20 @@
 use gptapi::MessageObject;
-use serenity::framework::standard::{
-    macros::{command, group, hook},
-    Args,
-};
 use serenity::framework::standard::{CommandResult, StandardFramework};
+use serenity::http::Typing;
 use serenity::model::channel::Message;
 use serenity::prelude::*;
 use serenity::{
     async_trait,
     utils::{content_safe, ContentSafeOptions},
 };
-use std::env;
+use serenity::{
+    framework::standard::{
+        macros::{command, group, hook},
+        Args,
+    },
+    model::prelude::ChannelId,
+};
+use std::{env, sync::Arc};
 
 mod gptapi;
 
@@ -54,25 +58,78 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-struct MessageData;
-impl TypeMapKey for MessageData {
-    type Value = Vec<gptapi::MessageObject>;
+#[command]
+async fn list(ctx: &Context, msg: &Message) -> CommandResult {
+    let typing = msg.channel_id.start_typing(&ctx.http)?;
+    let message_list: Vec<MessageObject> = {
+        let data_read = ctx.data.read().await;
+        let message_list_lock = data_read
+            .get::<MessageData>()
+            .expect("expected MessageData")
+            .clone();
+        let data = message_list_lock.read().await;
+        let list = data.clone().into_iter();
+        list.map(|m| m.clone()).collect()
+    };
+
+    let mut res = String::new();
+    for m in message_list {
+        res.push_str(&m.role);
+        res.push_str(": ");
+        if &m.content.len() > &18 {
+            res.push_str(&m.content[..18]);
+        } else {
+            res.push_str(&m.content);
+        }
+        res.push_str("...\n");
+    }
+    msg.channel_id.say(&ctx.http, &res).await?;
+    let _stopped = typing.stop();
+    Ok(())
 }
 
 #[command]
 async fn chat(ctx: &Context, msg: &Message) -> CommandResult {
-    // {
-    //     let data = ctx.data.read().await;
-    //     let messages = data.get::<MessageData>().expect("Expected messages");
+    let typing = msg.channel_id.start_typing(&ctx.http)?;
+    let mut message_list: Vec<MessageObject> = {
+        let data_read = ctx.data.read().await;
+        let message_list_lock = data_read
+            .get::<MessageData>()
+            .expect("expected MessageData")
+            .clone();
+        let data = message_list_lock.read().await;
+        let list = data.clone().into_iter();
+        list.map(|m| m.clone()).collect()
+    };
 
-    //     for m in messages {
-    //         println!("{:?}", m.content);
-    //     }
-    // }
+    let new_user_msg = MessageObject {
+        role: "user".to_owned(),
+        content: msg.content.clone(),
+    };
+    message_list.push(new_user_msg.clone());
 
     let gpt_bot = gptapi::GptBot::new();
-    let res = gpt_bot.gpt_req(msg.content.clone()).await?;
-    msg.channel_id.say(&ctx.http, &res).await?;
+    let res = gpt_bot.gpt_req(message_list).await?;
+
+    {
+        let data_read = ctx.data.read().await;
+        let message_list_lock = data_read
+            .get::<MessageData>()
+            .expect("expected MessageData")
+            .clone();
+
+        let mut data = message_list_lock.write().await;
+        data.push(new_user_msg);
+        data.push(MessageObject {
+            role: "assistant".to_owned(),
+            content: res.clone(),
+        });
+    }
+
+    // let message_list: Vec<MessageData> = {
+    //     let data_write = ctx.data.write().await;
+    //     let message_objects
+    // }
 
     // let mut data = ctx.data.write().await;
     // let messages = data.get_mut::<MessageData>().expect("Expected messages");
@@ -81,11 +138,13 @@ async fn chat(ctx: &Context, msg: &Message) -> CommandResult {
     //     content: res.clone(),
     // });
 
+    msg.channel_id.say(&ctx.http, &res).await?;
+    let _stopped = typing.stop();
     Ok(())
 }
 
 #[group]
-#[commands(ping, say, chat)]
+#[commands(ping, say, chat, list)]
 struct General;
 
 struct Handler;
@@ -121,8 +180,20 @@ async fn main() {
         .await
         .expect("Error creating client");
 
+    {
+        // Open the data lock in write mode, so keys can be inserted to it.
+        let mut data = client.data.write().await;
+        data.insert::<MessageData>(Arc::new(RwLock::new(vec![MessageObject{role:"system".to_owned(), content:"You are a playful chatbot creating creative samples from prompts sent through discord.".to_owned()}])));
+    }
+
     // start listening for events by starting a single shard
     if let Err(why) = client.start().await {
         println!("An error occurred while running the client: {:?}", why);
     }
+}
+
+struct MessageData;
+
+impl TypeMapKey for MessageData {
+    type Value = Arc<RwLock<Vec<MessageObject>>>;
 }
